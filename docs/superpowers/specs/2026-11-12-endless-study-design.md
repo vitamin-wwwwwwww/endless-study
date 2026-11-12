@@ -135,28 +135,33 @@
 ## 7. アーキテクチャ
 
 ```
+Packages/StudyCore/   UI にも SwiftData にも依存しない純粋な Swift パッケージ
+  Sources/StudyCore/
+    Leveling        XP → レベル、次レベルまでの進捗
+    Streak          勉強した日 → 現在 / 最長の連続日数
+    Stats           記録一覧 → 日別合計、タグ別合計、累計
+    Heatmap         草カレンダーの格子と濃淡
+    TimerMath       経過秒 → 分
+    Rewards         景品カタログ
+    Gacha           抽選（乱数生成器を注入）、券付与判定
+    Badges          統計値 → 解除済みバッジ
+    Progress        進捗スナップショット、保存結果の評価
+  Tests/StudyCoreTests/
 EndlessStudy/
   App/            アプリのエントリポイント、タブ構成、ModelContainer 設定
   Models/         SwiftData モデル
-  Logic/          UI にも SwiftData にも依存しない純粋な Swift
-    Leveling        XP → レベル、次レベルまでの進捗
-    Streak          日別合計 → 現在 / 最長の連続日数
-    Badges          統計値 → 解除済みバッジ
-    Gacha           抽選（乱数生成器を注入）、券付与判定
-    Stats           記録一覧 → 日別合計、タグ別合計、累計
-    RewardCatalog   景品とバッジの定義
+  Services/       RecordService（保存・券付与・ガチャ）、TimerStore
   Features/
     Home/         ホーム、タイマー
     Record/       保存シート、手入力、結果画面
     History/      草カレンダー、タグ別累計、履歴、編集
     Collection/   ガチャ、景品一覧、バッジ一覧
-  Support/        テーマ色、触覚、日付ユーティリティ
-EndlessStudyTests/  Logic のユニットテスト
+  Support/        テーマ色、表示用フォーマッタ
 project.yml         XcodeGen 定義
 ```
 
-- `Logic` は値型の入力（分数・日付の配列など）を受け取り、値を返す関数群とする。カレンダーと現在日時、乱数生成器は引数で注入し、テスト可能にする。
-- View は `@Query` で記録を取得し、`Logic` に渡して表示用の値を得る。
+- `StudyCore` は `Foundation` のみに依存する。値型の入力（分数・日付の配列など）を受け取り、値を返す関数群とする。カレンダーと現在日時、乱数生成器は引数で注入する。Xcode がなくても `swift test` でテストできる（Linux では Docker の `swift` イメージを使う）。
+- View は `@Query` で記録を取得し、`StudyCore` に渡して表示用の値を得る。
 - 保存処理（記録の追加、券付与、結果の組み立て）は 1 か所（`RecordService`）にまとめ、タイマーと手入力の両方から使う。
 
 ## 8. エラー処理・境界条件
@@ -169,7 +174,7 @@ project.yml         XcodeGen 定義
 
 ## 9. テスト
 
-`Logic` をユニットテストで検証する。
+`StudyCore` をユニットテストで検証する。
 
 - Leveling: 境界値（99 XP → Lv1、100 XP → Lv2 など）
 - Streak: 今日記録あり / 昨日まで / 途切れ / 記録なし / 最長の算出
@@ -190,4 +195,4 @@ UI は Xcode プレビューと実機で手動確認する。
 
 ## 11. 開発上の制約
 
-開発環境が Linux のため、Xcode でのビルドとシミュレータ確認はこの環境では行えない。初回ビルドは Mac 上で `xcodegen` を実行して Xcode で開き、コンパイルエラーが出た場合はその内容をもとに修正する。
+開発環境が Linux のため、Xcode でのビルドとシミュレータ確認はこの環境では行えない。`StudyCore` は Docker 上の Swift でテストし、アプリ本体は構文チェックまでとする。アプリの初回ビルドは Mac 上で `xcodegen generate` を実行して Xcode で開き、コンパイルエラーが出た場合はその内容をもとに修正する。
