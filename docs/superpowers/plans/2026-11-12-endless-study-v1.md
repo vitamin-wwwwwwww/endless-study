@@ -849,7 +849,7 @@ git commit -m "feat(core): 景品カタログとガチャ抽選を追加"
   - `struct Badge: Identifiable, Equatable, Sendable { let id: String; let name: String; let category: BadgeCategory; let threshold: Int; var conditionText: String; func isUnlocked(by: BadgeStats) -> Bool }`
   - `enum Badges { static let all: [Badge]; static func unlockedIDs(for: BadgeStats) -> Set<String> }`
   - `struct ProgressSnapshot: Equatable, Sendable { let totalMinutes: Int; let totalXP: Int; let level: LevelProgress; let streak: StreakInfo; let todayMinutes: Int; let dailyTotals: [Date: Int]; let unlockedBadgeIDs: Set<String> }`
-  - `enum Progress { static func snapshot(sessions: [SessionRecord], bonusXP: Int, today: Date, calendar: Calendar) -> ProgressSnapshot }`
+  - `enum StudyProgress { static func snapshot(sessions: [SessionRecord], bonusXP: Int, today: Date, calendar: Calendar) -> ProgressSnapshot }`
   - `struct RecordOutcome: Equatable, Sendable { let xpGained: Int; let levelBefore: Int; let levelAfter: Int; let newBadgeIDs: [String]; let ticketsAwarded: Int; var leveledUp: Bool }`（`newBadgeIDs` は `Badges.all` の定義順）
   - `enum RecordEvaluator { static func outcome(existing: [SessionRecord], new: SessionRecord, bonusXP: Int, today: Date, calendar: Calendar) -> RecordOutcome }`
 
@@ -919,7 +919,7 @@ final class ProgressTests: XCTestCase {
             SessionRecord(startedAt: day(2026, 11, 12, hour: 8), minutes: 30),
             SessionRecord(startedAt: day(2026, 11, 12, hour: 20), minutes: 10),
         ]
-        let snapshot = Progress.snapshot(sessions: sessions, bonusXP: 50, today: today, calendar: utc)
+        let snapshot = StudyProgress.snapshot(sessions: sessions, bonusXP: 50, today: today, calendar: utc)
         XCTAssertEqual(snapshot.totalMinutes, 100)
         XCTAssertEqual(snapshot.totalXP, 150)
         XCTAssertEqual(snapshot.level, LevelProgress(level: 2, xpIntoLevel: 50, xpForNextLevel: 200))
@@ -929,7 +929,7 @@ final class ProgressTests: XCTestCase {
     }
 
     func testEmptySnapshot() {
-        let snapshot = Progress.snapshot(sessions: [], bonusXP: 0, today: today, calendar: utc)
+        let snapshot = StudyProgress.snapshot(sessions: [], bonusXP: 0, today: today, calendar: utc)
         XCTAssertEqual(snapshot.totalXP, 0)
         XCTAssertEqual(snapshot.level.level, 1)
         XCTAssertEqual(snapshot.streak, StreakInfo(current: 0, longest: 0))
@@ -1096,7 +1096,7 @@ public struct ProgressSnapshot: Equatable, Sendable {
     public let unlockedBadgeIDs: Set<String>
 }
 
-public enum Progress {
+public enum StudyProgress {
     public static func snapshot(sessions: [SessionRecord], bonusXP: Int,
                                 today: Date, calendar: Calendar) -> ProgressSnapshot {
         let daily = Stats.dailyTotals(sessions, calendar: calendar)
@@ -1146,8 +1146,8 @@ public struct RecordOutcome: Equatable, Sendable {
 public enum RecordEvaluator {
     public static func outcome(existing: [SessionRecord], new: SessionRecord, bonusXP: Int,
                                today: Date, calendar: Calendar) -> RecordOutcome {
-        let before = Progress.snapshot(sessions: existing, bonusXP: bonusXP, today: today, calendar: calendar)
-        let after = Progress.snapshot(sessions: existing + [new], bonusXP: bonusXP, today: today, calendar: calendar)
+        let before = StudyProgress.snapshot(sessions: existing, bonusXP: bonusXP, today: today, calendar: calendar)
+        let after = StudyProgress.snapshot(sessions: existing + [new], bonusXP: bonusXP, today: today, calendar: calendar)
 
         let newDay = calendar.startOfDay(for: new.startedAt)
         let qualifying = existing.filter {
@@ -1201,7 +1201,7 @@ git commit -m "feat(core): バッジ・進捗スナップショット・保存�
   - `@Model final class Tag { var id: UUID; var name: String; var colorHex: String; var createdAt: Date; var sessions: [StudySession]; init(name:colorHex:) }`
   - `@Model final class OwnedReward { var rewardID: String; var obtainedAt: Date; init(rewardID:) }`
   - `@Model final class PlayerState { var gachaTickets: Int; var bonusXP: Int; var equippedTitleID: String?; var equippedThemeID: String?; init() }`
-  - `@MainActor struct RecordService { init(context: ModelContext); func playerState() throws -> PlayerState; func save(startedAt: Date, minutes: Int, tag: Tag?, memo: String, source: SessionSource) throws -> RecordOutcome; func drawGacha() throws -> GachaResult? }`（券 0 枚なら `nil`）
+  - `struct RecordService { init(context: ModelContext); func playerState() throws -> PlayerState; func save(startedAt: Date, minutes: Int, tag: Tag?, memo: String, source: SessionSource) throws -> RecordOutcome; func drawGacha() throws -> GachaResult? }`（券 0 枚なら `nil`）
   - `@Observable final class TimerStore { var startedAt: Date? { get }; var isRunning: Bool; func start(); func clear() }`
   - `func formatMinutes(_ minutes: Int) -> String`（例: 80 → "1時間20分"、45 → "45分"、120 → "2時間"）
   - `extension Color { init(hex: String) }`
@@ -1329,7 +1329,6 @@ import Foundation
 import SwiftData
 import StudyCore
 
-@MainActor
 struct RecordService {
     let context: ModelContext
 
@@ -1350,10 +1349,12 @@ struct RecordService {
               source: SessionSource) throws -> RecordOutcome {
         let existing = try context.fetch(FetchDescriptor<StudySession>()).map(\.record)
         let state = try playerState()
-        let session = StudySession(startedAt: startedAt, minutes: minutes, memo: memo, source: source, tag: tag)
-        let outcome = RecordEvaluator.outcome(existing: existing, new: session.record,
+        let record = SessionRecord(startedAt: startedAt, minutes: minutes, tagID: tag?.id)
+        let outcome = RecordEvaluator.outcome(existing: existing, new: record,
                                               bonusXP: state.bonusXP, today: .now, calendar: .current)
+        let session = StudySession(startedAt: startedAt, minutes: minutes, memo: memo, source: source, tag: nil)
         context.insert(session)
+        session.tag = tag
         state.gachaTickets += outcome.ticketsAwarded
         do {
             try context.save()
@@ -1889,7 +1890,7 @@ git commit -m "feat(app): 記録フォームと保存直後の結果画面を追
 - Modify（全文置き換え）: `EndlessStudy/Features/Home/HomeView.swift`
 
 **Interfaces:**
-- Consumes: `TimerStore`、`SessionFormView`/`SessionFormMode`、`ResultView`、`StudySession.record`、`PlayerState`、`formatMinutes`、`StudyCore.Progress.snapshot`、`StudyCore.TimerMath.elapsedMinutes`、`StudyCore.RewardCatalog.reward(id:)`、`StudyCore.RecordOutcome`
+- Consumes: `TimerStore`、`SessionFormView`/`SessionFormMode`、`ResultView`、`StudySession.record`、`PlayerState`、`formatMinutes`、`StudyCore.StudyProgress.snapshot`、`StudyCore.TimerMath.elapsedMinutes`、`StudyCore.RewardCatalog.reward(id:)`、`StudyCore.RecordOutcome`
 - Produces: `struct HomeView: View`
 
 - [ ] **Step 1: HomeView を実装する**
@@ -1921,7 +1922,7 @@ struct HomeView: View {
     @State private var shownOutcome: OutcomeBox?
 
     private var snapshot: ProgressSnapshot {
-        Progress.snapshot(sessions: sessions.map(\.record), bonusXP: states.first?.bonusXP ?? 0,
+        StudyProgress.snapshot(sessions: sessions.map(\.record), bonusXP: states.first?.bonusXP ?? 0,
                           today: .now, calendar: .current)
     }
 
@@ -1930,7 +1931,7 @@ struct HomeView: View {
     }
 
     var body: some View {
-        let snapshot = snapshot
+        let snapshot = self.snapshot
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
@@ -1999,7 +2000,7 @@ struct HomeView: View {
                         .font(.subheadline)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
-                        .background(.tint.opacity(0.2), in: Capsule())
+                        .background(TintShapeStyle().opacity(0.2), in: Capsule())
                 }
                 Spacer()
                 Text("\(snapshot.level.xpIntoLevel) / \(snapshot.level.xpForNextLevel) XP")
@@ -2122,7 +2123,7 @@ struct HeatmapView: View {
             let level = Heatmap.intensity(minutes: dailyTotals[date] ?? 0)
             RoundedRectangle(cornerRadius: 3)
                 .fill(level == 0 ? AnyShapeStyle(Color.secondary.opacity(0.15))
-                                 : AnyShapeStyle(.tint.opacity(Double(level) * 0.25)))
+                                 : AnyShapeStyle(TintShapeStyle().opacity(Double(level) * 0.25)))
                 .frame(width: cell, height: cell)
         } else {
             Color.clear.frame(width: cell, height: cell)
@@ -2170,7 +2171,7 @@ struct HistoryView: View {
                     .onDelete { offsets in
                         delete(offsets.map { tags[$0] })
                     }
-                    if let untagged = tagTotals[nil] {
+                    if let untagged = tagTotals[UUID?.none] {
                         HStack {
                             Circle().fill(Color.secondary).frame(width: 12, height: 12)
                             Text("タグなし")
@@ -2275,7 +2276,7 @@ git commit -m "feat(app): 草カレンダー・タグ別累計・履歴を追加
 - Modify（全文置き換え）: `EndlessStudy/Features/Collection/CollectionView.swift`
 
 **Interfaces:**
-- Consumes: `RecordService.drawGacha()`、`RecordService.playerState()`、`OwnedReward`、`PlayerState`、`StudySession.record`、`Color(hex:)`、`StudyCore.RewardCatalog`、`StudyCore.Reward`、`StudyCore.Rarity`、`StudyCore.GachaResult`、`StudyCore.Badges`、`StudyCore.Progress.snapshot`
+- Consumes: `RecordService.drawGacha()`、`RecordService.playerState()`、`OwnedReward`、`PlayerState`、`StudySession.record`、`Color(hex:)`、`StudyCore.RewardCatalog`、`StudyCore.Reward`、`StudyCore.Rarity`、`StudyCore.GachaResult`、`StudyCore.Badges`、`StudyCore.StudyProgress.snapshot`
 - Produces: `struct CollectionView: View`
 
 - [ ] **Step 1: CollectionView を実装する**
@@ -2306,7 +2307,7 @@ struct CollectionView: View {
     private var ownedIDs: Set<String> { Set(ownedRewards.map(\.rewardID)) }
 
     var body: some View {
-        let unlocked = Progress.snapshot(sessions: sessions.map(\.record), bonusXP: states.first?.bonusXP ?? 0,
+        let unlocked = StudyProgress.snapshot(sessions: sessions.map(\.record), bonusXP: states.first?.bonusXP ?? 0,
                                          today: .now, calendar: .current).unlockedBadgeIDs
         NavigationStack {
             List {
@@ -2334,7 +2335,7 @@ struct CollectionView: View {
                         let isUnlocked = unlocked.contains(badge.id)
                         HStack {
                             Image(systemName: isUnlocked ? "rosette" : "lock.fill")
-                                .foregroundStyle(isUnlocked ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                                .foregroundStyle(isUnlocked ? AnyShapeStyle(TintShapeStyle()) : AnyShapeStyle(Color.secondary))
                             VStack(alignment: .leading) {
                                 Text(isUnlocked ? badge.name : "？？？")
                                 Text(badge.conditionText)
